@@ -1,2 +1,2 @@
-# diffusion-model
-Conditional diffusion model implementation for multidimensional input 
+# conditional-diffusion-ml
+Conditional diffusion machine learning implementation for multidimensional input 
