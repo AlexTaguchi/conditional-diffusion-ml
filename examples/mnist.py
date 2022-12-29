@@ -26,5 +26,5 @@ data_loader = torch.utils.data.DataLoader(
 
 # Train model
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-diffusion = Diffusion(noise_steps=1000, img_size=16, device=device)
+diffusion = Diffusion([16, 16], 1, device=device)
 diffusion.train(dataloader=data_loader)
