@@ -1,117 +1,110 @@
-import os
-import torch
-import torch.nn as nn
-from matplotlib import pyplot as plt
-from tqdm import tqdm
-from torch import optim
+# Import modules
 from conditional_diffusion_ml.utils import *
 from conditional_diffusion_ml.modules import UNet
 import logging
-# from torch.utils.tensorboard import SummaryWriter
+import torch
+import torch.nn as nn
+from tqdm import tqdm
 
-logging.basicConfig(format="%(asctime)s - %(levelname)s: %(message)s", level=logging.INFO, datefmt="%I:%M:%S")
+# Initialize logger
+logging.basicConfig(format='%(asctime)s - %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
 
 
 class Diffusion:
-    def __init__(self, noise_steps=1000, beta_start=1e-4, beta_end=0.02, img_size=256, device="cuda"):
+    def __init__(self, dimensions, features, beta_start=1e-4, beta_end=0.02, device='cuda', noise_steps=1000):
+
+        # Build U-Net model
+        self.dimensions = dimensions
+        self.features = features
+        self.model = UNet(channels=features).to(device)
+
+        # Set diffusion parameters
         self.noise_steps = noise_steps
         self.beta_start = beta_start
         self.beta_end = beta_end
-        self.img_size = img_size
         self.device = device
 
+        # Prepare noise schedule
         self.beta = self.prepare_noise_schedule().to(device)
         self.alpha = 1. - self.beta
         self.alpha_hat = torch.cumprod(self.alpha, dim=0)
+    
+    def generate(self, samples):
 
-    def prepare_noise_schedule(self):
-        return torch.linspace(self.beta_start, self.beta_end, self.noise_steps)
+        # Switch model into evaluation mode
+        logging.info(f'Generating {samples} samples...')
+        self.model.eval()
+        with torch.no_grad():
+
+            # Start with random noise as input
+            x = torch.randn((samples, 1, *self.dimensions)).to(self.device)
+
+            # Incrementally denoise input
+            for i in tqdm(reversed(range(1, self.noise_steps)), position=0):
+
+                # Set denoising parameters for current time step
+                t = (torch.ones(samples) * i).long().to(self.device)
+                alpha = self.alpha[t][:, None, None, None]
+                alpha_hat = self.alpha_hat[t][:, None, None, None]
+                beta = self.beta[t][:, None, None, None]
+
+                # Partially remove noise from input
+                predicted_noise = self.model(x, t)
+                predicted_noise_scaled = ((1 - alpha) / (torch.sqrt(1 - alpha_hat))) * predicted_noise
+                noise = torch.randn_like(x) if i > 1 else torch.zeros_like(x)
+                noise_scaled = torch.sqrt(beta) * noise
+                x = 1 / torch.sqrt(alpha) * (x - predicted_noise_scaled) + noise_scaled
+
+        # Rescale input
+        x = (x.clamp(-1, 1) + 1) / 2
+        x = (x * 255).type(torch.uint8)
+
+        # Switch model back into training mode
+        self.model.train()
+
+        return x
 
     def noise_images(self, x, t):
         sqrt_alpha_hat = torch.sqrt(self.alpha_hat[t])[:, None, None, None]
         sqrt_one_minus_alpha_hat = torch.sqrt(1 - self.alpha_hat[t])[:, None, None, None]
-        Ɛ = torch.randn_like(x)
-        return sqrt_alpha_hat * x + sqrt_one_minus_alpha_hat * Ɛ, Ɛ
+        epsilon = torch.randn_like(x)
+        return sqrt_alpha_hat * x + sqrt_one_minus_alpha_hat * epsilon, epsilon
+    
+    def prepare_noise_schedule(self):
+        return torch.linspace(self.beta_start, self.beta_end, self.noise_steps)
 
     def sample_timesteps(self, n):
         return torch.randint(low=1, high=self.noise_steps, size=(n,))
 
-    def sample(self, model, n):
-        logging.info(f"Sampling {n} new images....")
-        model.eval()
-        with torch.no_grad():
-            x = torch.randn((n, 1, self.img_size, self.img_size)).to(self.device)
-            for i in tqdm(reversed(range(1, self.noise_steps)), position=0):
-                t = (torch.ones(n) * i).long().to(self.device)
-                predicted_noise = model(x, t)
-                alpha = self.alpha[t][:, None, None, None]
-                alpha_hat = self.alpha_hat[t][:, None, None, None]
-                beta = self.beta[t][:, None, None, None]
-                if i > 1:
-                    noise = torch.randn_like(x)
-                else:
-                    noise = torch.zeros_like(x)
-                x = 1 / torch.sqrt(alpha) * (x - ((1 - alpha) / (torch.sqrt(1 - alpha_hat))) * predicted_noise) + torch.sqrt(beta) * noise
-        model.train()
-        x = (x.clamp(-1, 1) + 1) / 2
-        x = (x * 255).type(torch.uint8)
-        return x
+    def train(self, dataloader, epochs=500, learning_rate=3e-4):
 
-    def train(self, dataloader, epochs=500, image_size=32, lr=3e-4):
-        model = UNet(channels=1).to(self.device)
-        optimizer = optim.AdamW(model.parameters(), lr=lr)
+        # Set optimizer and loss function
+        optimizer = torch.optim.AdamW(self.model.parameters(), lr=learning_rate)
         mse = nn.MSELoss()
-        # diffusion = Diffusion(img_size=image_size, device=self.device)
-        # l = len(dataloader)
 
+        # Train for multiple epochs
         for epoch in range(epochs):
-            logging.info(f"Starting epoch {epoch}:")
-            pbar = tqdm(dataloader)
-            for i, (images, _) in enumerate(pbar):
+            logging.info(f'Starting epoch {epoch}:')
+
+            # Train for each batch in dataloader
+            progress_bar = tqdm(dataloader)
+            for i, (images, _) in enumerate(progress_bar):
                 images = images.to(self.device)
                 t = self.sample_timesteps(images.shape[0]).to(self.device)
                 x_t, noise = self.noise_images(images, t)
-                predicted_noise = model(x_t, t)
+                predicted_noise = self.model(x_t, t)
                 loss = mse(noise, predicted_noise)
 
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
 
-                pbar.set_postfix(MSE=loss.item())
-                # logger.add_scalar("MSE", loss.item(), global_step=epoch * l + i)
+                progress_bar.set_postfix(MSE=loss.item())
 
-            sampled_images = self.sample(model, n=images.shape[0])
-            save_images(sampled_images, f"results/Epoch-{epoch}.jpg")
-            # torch.save(model.state_dict(), os.path.join("models", args.run_name, f"ckpt.pt"))
-
-
-# def launch():
-#     import argparse
-#     parser = argparse.ArgumentParser()
-#     args = parser.parse_args()
-#     args.run_name = "DDPM_Uncondtional"
-#     args.epochs = 500
-#     args.batch_size = 12
-#     args.image_size = 64
-#     args.dataset_path = r"C:\Users\dome\datasets\landscape_img_folder"
-#     args.device = "cuda"
-#     args.lr = 3e-4
-#     train(args)
+            sampled_images = self.generate(16)
+            save_images(sampled_images, f'results/Epoch-{epoch}.jpg')
+            # torch.save(model.state_dict(), os.path.join('models', args.run_name, f'ckpt.pt'))
 
 
 if __name__ == '__main__':
     pass
-    # launch()
-    # device = "cuda"
-    # model = UNet().to(device)
-    # ckpt = torch.load("./working/orig/ckpt.pt")
-    # model.load_state_dict(ckpt)
-    # diffusion = Diffusion(img_size=64, device=device)
-    # x = diffusion.sample(model, 8)
-    # print(x.shape)
-    # plt.figure(figsize=(32, 32))
-    # plt.imshow(torch.cat([
-    #     torch.cat([i for i in x.cpu()], dim=-1),
-    # ], dim=-2).permute(1, 2, 0).cpu())
-    # plt.show()
