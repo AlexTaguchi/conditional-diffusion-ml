@@ -8,7 +8,7 @@ import torch
 from torchvision import datasets, transforms
 
 # Set training parameters
-batch_size = 10
+batch_size = 32
 
 # Initialize data loader
 data_loader = torch.utils.data.DataLoader(

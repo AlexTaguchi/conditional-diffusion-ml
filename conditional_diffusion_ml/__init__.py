@@ -1,7 +1,9 @@
 # Import modules
 from conditional_diffusion_ml.utils import *
 from conditional_diffusion_ml.modules import UNet
+from glob import glob
 import logging
+import os
 import torch
 import torch.nn as nn
 from tqdm import tqdm
@@ -25,7 +27,7 @@ class Diffusion:
         self.device = device
 
         # Prepare noise schedule
-        self.beta = self.prepare_noise_schedule().to(device)
+        self.beta = self.prepare_noise_schedule()
         self.alpha = 1. - self.beta
         self.alpha_hat = torch.cumprod(self.alpha, dim=0)
     
@@ -64,17 +66,17 @@ class Diffusion:
 
         return x
 
-    def noise_images(self, x, t):
+    def noise_data(self, x, t):
         sqrt_alpha_hat = torch.sqrt(self.alpha_hat[t])[:, None, None, None]
         sqrt_one_minus_alpha_hat = torch.sqrt(1 - self.alpha_hat[t])[:, None, None, None]
         epsilon = torch.randn_like(x)
         return sqrt_alpha_hat * x + sqrt_one_minus_alpha_hat * epsilon, epsilon
     
     def prepare_noise_schedule(self):
-        return torch.linspace(self.beta_start, self.beta_end, self.noise_steps)
+        return torch.linspace(self.beta_start, self.beta_end, self.noise_steps).to(self.device)
 
     def sample_timesteps(self, n):
-        return torch.randint(low=1, high=self.noise_steps, size=(n,))
+        return torch.randint(low=1, high=self.noise_steps, size=(n,)).to(self.device)
 
     def train(self, dataloader, epochs=500, learning_rate=3e-4):
 
@@ -82,28 +84,41 @@ class Diffusion:
         optimizer = torch.optim.AdamW(self.model.parameters(), lr=learning_rate)
         mse = nn.MSELoss()
 
-        # Train for multiple epochs
+        # Train across multiple epochs
         for epoch in range(epochs):
+            epoch += 1
             logging.info(f'Starting epoch {epoch}:')
 
-            # Train for each batch in dataloader
+            # Train in batches
             progress_bar = tqdm(dataloader)
-            for i, (images, _) in enumerate(progress_bar):
-                images = images.to(self.device)
-                t = self.sample_timesteps(images.shape[0]).to(self.device)
-                x_t, noise = self.noise_images(images, t)
-                predicted_noise = self.model(x_t, t)
-                loss = mse(noise, predicted_noise)
+            for data, _ in progress_bar:
 
+                # Predict noise in data
+                data = data.to(self.device)
+                t = self.sample_timesteps(data.shape[0])
+                x_t, noise = self.noise_data(data, t)
+                predicted_noise = self.model(x_t, t)
+
+                # Optimize loss function
+                loss = mse(noise, predicted_noise)
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
 
+                # Report MSE loss
                 progress_bar.set_postfix(MSE=loss.item())
 
-            sampled_images = self.generate(16)
-            save_images(sampled_images, f'results/Epoch-{epoch}.jpg')
-            # torch.save(model.state_dict(), os.path.join('models', args.run_name, f'ckpt.pt'))
+            # Sample generator
+            data_generated = self.generate(16)
+            epoch_id = str(epoch).zfill(len(str(epochs)))
+            save_images(data_generated, f'results/epoch-{epoch_id}.jpg')
+
+            # Update model checkpoint
+            model_dimensions = '-'.join(self.dimensions + [self.features])
+            torch.save(self.model.state_dict(), f'models/diffusion_unet-{model_dimensions}_epoch-{epoch_id}.pt')
+            if len(glob('models/*.pt')) > 1:
+                for checkpoint in sorted(glob('models/*.pt'))[:-1]:
+                    os.remove(checkpoint)
 
 
 if __name__ == '__main__':
