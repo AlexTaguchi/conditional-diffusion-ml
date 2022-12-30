@@ -129,4 +129,5 @@ dmypy.json
 
 # conditional-diffusion-ml
 .DS_Store
-examples/data/MNIST/raw/
+examples/data/
+examples/models/

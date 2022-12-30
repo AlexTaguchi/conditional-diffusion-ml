@@ -1,6 +1,6 @@
 # Import modules
-from conditional_diffusion_ml.utils import *
-from conditional_diffusion_ml.modules import UNet
+from conditional_diffusion_ml.utils import save_images
+from conditional_diffusion_ml.unet import UNet
 from glob import glob
 import logging
 import os
@@ -114,7 +114,9 @@ class Diffusion:
             save_images(data_generated, f'results/epoch-{epoch_id}.jpg')
 
             # Update model checkpoint
-            model_dimensions = '-'.join(self.dimensions + [self.features])
+            if not os.path.exists('models'):
+                os.mkdir('models')
+            model_dimensions = '-'.join([str(x) for x in self.dimensions + [self.features]])
             torch.save(self.model.state_dict(), f'models/diffusion_unet-{model_dimensions}_epoch-{epoch_id}.pt')
             if len(glob('models/*.pt')) > 1:
                 for checkpoint in sorted(glob('models/*.pt'))[:-1]:
