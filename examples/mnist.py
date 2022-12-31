@@ -17,7 +17,7 @@ data_loader = torch.utils.data.DataLoader(
         train=False,
         download=True,
         transform=transforms.Compose([
-            transforms.Resize(16),
+            transforms.Resize(32),
             transforms.ToTensor(),
     ])),
     batch_size=batch_size,
@@ -26,5 +26,5 @@ data_loader = torch.utils.data.DataLoader(
 
 # Train model
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-diffusion = Diffusion([16, 16], 1, device=device)
+diffusion = Diffusion([32, 32], 1, classes=10, device=device)
 diffusion.train(dataloader=data_loader)
