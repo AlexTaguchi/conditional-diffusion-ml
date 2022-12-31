@@ -118,6 +118,8 @@ class Diffusion:
                 samples_grid = torchvision.utils.make_grid(samples_generated)
                 samples_array = samples_grid.permute(1, 2, 0).to('cpu').numpy()
                 image = Image.fromarray(samples_array)
+                if not os.path.exists('results'):
+                    os.mkdir('results')
                 image.save(f'results/epoch-{epoch_id}.jpg')
 
             # Update model checkpoint
