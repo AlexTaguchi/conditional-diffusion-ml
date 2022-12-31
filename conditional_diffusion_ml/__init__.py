@@ -1,24 +1,27 @@
 # Import modules
-from conditional_diffusion_ml.utils import save_images
 from conditional_diffusion_ml.unet import UNet
 from glob import glob
 import logging
 import os
+from PIL import Image
 import torch
 import torch.nn as nn
+import torchvision
 from tqdm import tqdm
 
 # Initialize logger
-logging.basicConfig(format='%(asctime)s - %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
+logging.basicConfig(format='%(asctime)s - %(message)s', level=logging.INFO, datefmt='%Y-%m-%d %H:%M:%S')
 
 
 class Diffusion:
-    def __init__(self, dimensions, features, beta_start=1e-4, beta_end=0.02, device='cuda', noise_steps=1000):
+    def __init__(self, dimensions, features, classes=None,
+                 beta_start=1e-4, beta_end=0.02, device='cuda', noise_steps=1000):
 
         # Build U-Net model
         self.dimensions = dimensions
         self.features = features
-        self.model = UNet(channels=features).to(device)
+        self.classes = classes
+        self.model = UNet(channels=features, classes=classes).to(device)
 
         # Set diffusion parameters
         self.noise_steps = noise_steps
@@ -34,7 +37,6 @@ class Diffusion:
     def generate(self, samples):
 
         # Switch model into evaluation mode
-        logging.info(f'Generating {samples} samples...')
         self.model.eval()
         with torch.no_grad():
 
@@ -51,7 +53,8 @@ class Diffusion:
                 beta = self.beta[t][:, None, None, None]
 
                 # Partially remove noise from input
-                predicted_noise = self.model(x, t)
+                y = torch.LongTensor(list(range(self.classes))).to(self.device) if self.classes else None
+                predicted_noise = self.model(x, t, y)
                 predicted_noise_scaled = ((1 - alpha) / (torch.sqrt(1 - alpha_hat))) * predicted_noise
                 noise = torch.randn_like(x) if i > 1 else torch.zeros_like(x)
                 noise_scaled = torch.sqrt(beta) * noise
@@ -85,19 +88,19 @@ class Diffusion:
         mse = nn.MSELoss()
 
         # Train across multiple epochs
-        for epoch in range(epochs):
-            epoch += 1
-            logging.info(f'Starting epoch {epoch}:')
+        for epoch in range(epochs + 1):
+            logging.info(f'Epoch {epoch}')
 
             # Train in batches
             progress_bar = tqdm(dataloader)
-            for data, _ in progress_bar:
+            for data, labels in progress_bar:
 
                 # Predict noise in data
                 data = data.to(self.device)
+                labels = labels.to(self.device)
                 t = self.sample_timesteps(data.shape[0])
                 x_t, noise = self.noise_data(data, t)
-                predicted_noise = self.model(x_t, t)
+                predicted_noise = self.model(x_t, t, labels)
 
                 # Optimize loss function
                 loss = mse(noise, predicted_noise)
@@ -109,9 +112,13 @@ class Diffusion:
                 progress_bar.set_postfix(MSE=loss.item())
 
             # Sample generator
-            data_generated = self.generate(16)
             epoch_id = str(epoch).zfill(len(str(epochs)))
-            save_images(data_generated, f'results/epoch-{epoch_id}.jpg')
+            if epoch_id[-1] == '0':
+                samples_generated = self.generate(self.classes if self.classes else 16)
+                samples_grid = torchvision.utils.make_grid(samples_generated)
+                samples_array = samples_grid.permute(1, 2, 0).to('cpu').numpy()
+                image = Image.fromarray(samples_array)
+                image.save(f'results/epoch-{epoch_id}.jpg')
 
             # Update model checkpoint
             if not os.path.exists('models'):

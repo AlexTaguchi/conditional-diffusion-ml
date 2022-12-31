@@ -98,7 +98,7 @@ class Up(nn.Module):
 
 
 class UNet(nn.Module):
-    def __init__(self, channels=3, time_dim=256):
+    def __init__(self, channels=3, time_dim=256, classes=None):
         super().__init__()
         self.time_dim = time_dim
         self.inc = DoubleConv(channels, 64)
@@ -121,9 +121,12 @@ class UNet(nn.Module):
         self.sa6 = SelfAttention(64)
         self.outc = nn.Conv2d(64, channels, kernel_size=1)
 
+        if classes is not None:
+            self.class_embedding = nn.Embedding(classes, time_dim)
+
     def pos_encoding(self, t, channels):
-        device = next(self.parameters()).device
-        inv_freq = 1.0 / (10000 ** (torch.arange(0, channels, 2, device=device).float() / channels))
+        model_device = next(self.parameters()).device
+        inv_freq = 1.0 / (10000 ** (torch.arange(0, channels, 2, device=model_device).float() / channels))
         pos_enc_a = torch.sin(t.repeat(1, channels // 2) * inv_freq)
         pos_enc_b = torch.cos(t.repeat(1, channels // 2) * inv_freq)
         pos_enc = torch.cat([pos_enc_a, pos_enc_b], dim=-1)
@@ -151,23 +154,11 @@ class UNet(nn.Module):
         output = self.outc(x)
         return output
     
-    def forward(self, x, t):
-        t = t.unsqueeze(-1)
-        t = self.pos_encoding(t, self.time_dim)
-        return self.unet_forwad(x, t)
-
-
-class UNet_conditional(UNet):
-    def __init__(self, c_in=3, c_out=3, time_dim=256, num_classes=None):
-        super().__init__(c_in, c_out, time_dim)
-        if num_classes is not None:
-            self.label_emb = nn.Embedding(num_classes, time_dim)
-
     def forward(self, x, t, y=None):
         t = t.unsqueeze(-1)
         t = self.pos_encoding(t, self.time_dim)
 
         if y is not None:
-            t += self.label_emb(y)
-
+            t += self.class_embedding(y)
+        
         return self.unet_forwad(x, t)
